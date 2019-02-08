@@ -13,6 +13,8 @@ use slog::Logger;
 use tokio::executor::current_thread::spawn;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::timer::Interval;
+use tokio::reactor::Handle;
+use net2::TcpBuilder;
 
 use metric::{Metric, MetricError};
 use protocol_capnp::message as cmsg;
@@ -177,6 +179,7 @@ pub struct NativeProtocolSnapshot {
     interval: Duration,
     chans: Vec<Sender<Task>>,
     log: Logger,
+    bind_addr: SocketAddr,
 }
 
 impl NativeProtocolSnapshot {
@@ -185,12 +188,14 @@ impl NativeProtocolSnapshot {
         nodes: Vec<SocketAddr>,
         interval: Duration,
         chans: &Vec<Sender<Task>>,
+        bind_addr: SocketAddr,
     ) -> Self {
         Self {
             log: log.new(o!("source"=>"peer-client")),
             nodes,
             interval,
             chans: chans.clone(),
+            bind_addr: bind_addr,
         }
     }
 }
@@ -206,6 +211,7 @@ impl IntoFuture for NativeProtocolSnapshot {
             nodes,
             interval,
             chans,
+            bind_addr,
         } = self;
 
         let timer = Interval::new(Instant::now() + interval, interval);
@@ -243,7 +249,9 @@ impl IntoFuture for NativeProtocolSnapshot {
                         let metrics = metrics.clone();
                         let elog = elog.clone();
                         let dlog = dlog.clone();
-                        TcpStream::connect(&address)
+                        let tcp = TcpBuilder::new_v4().unwrap();
+                        let tcp_stream = tcp.bind(bind_addr).unwrap().to_tcp_stream().unwrap();
+                        TcpStream::connect_std(tcp_stream, &address, &Handle::default())
                             .map_err(|e| PeerError::Io(e))
                             .and_then(move |conn| {
                                 let codec = ::capnp_futures::serialize::Transport::new(
